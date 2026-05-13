@@ -127,16 +127,20 @@ function activityEmoji(ativ) {
 }
 
 // ─── Load today's plan ────────────────────────────────────────────────────────
-async function loadTodayPlan() {
+async function loadTodayPlan({ force = false } = {}) {
   const date = todayStr();
-  if (lastLoadedDate === date && todayActivities.length > 0) return;
+
+  // Reset alerted IDs on new day
+  if (lastLoadedDate !== date) {
+    alertedIds    = new Set();
+    pendingConfirm = null;
+  }
 
   try {
     const activities = await fetchTodayActivities(date);
     todayActivities = activities;
     lastLoadedDate  = date;
-    alertedIds      = new Set();
-    console.log(`[PLEX] Plano carregado: ${date} — ${activities.length} atividades`);
+    console.log(`[PLEX] Plano atualizado: ${date} — ${activities.length} atividades`);
   } catch (err) {
     console.error('[PLEX] Erro ao carregar plano:', err.message);
   }
@@ -171,22 +175,21 @@ function calcDuracao(inicio, fim) {
   return (h2 * 60 + m2) - (h1 * 60 + m1);
 }
 
-// ─── Cron: check every minute ─────────────────────────────────────────────────
+// ─── Cron: every minute — fetch fresh data then check alerts ─────────────────
 cron.schedule('* * * * *', async () => {
   try {
-    await loadTodayPlan();
+    await loadTodayPlan(); // sempre busca dados frescos — captura qualquer mudança no PLEX
 
-    const nowHHMM = nowHHMM();
-    const date   = todayStr();
+    const currentHHMM = nowHHMM();
 
     for (const act of todayActivities) {
       if (alertedIds.has(act.id)) continue;
       if (act.status === 'EXECUTADO' || act.status === 'DESVIO') continue;
 
       const actHHMM = hhmm(act.inicio_planejado);
-      if (actHHMM === nowHHMM) {
+      if (actHHMM === currentHHMM) {
         await sendAlert(act);
-        break; // one at a time
+        break; // um alerta por vez
       }
     }
   } catch (err) {
@@ -194,14 +197,10 @@ cron.schedule('* * * * *', async () => {
   }
 });
 
-// ─── Reload plan at midnight ──────────────────────────────────────────────────
+// ─── Meia-noite: log de novo dia (reset feito automaticamente no loadTodayPlan)
 cron.schedule('0 0 * * *', () => {
-  todayActivities = [];
-  alertedIds      = new Set();
-  pendingConfirm  = null;
-  lastLoadedDate  = null;
-  console.log('[BOT] Novo dia — plano resetado');
-}, { timezone: TZ });
+  console.log('[BOT] Novo dia em Brasília');
+}, { timezone: 'America/Sao_Paulo' });
 
 // ─── Handle Telegram replies ──────────────────────────────────────────────────
 bot.on('message', async (msg) => {
