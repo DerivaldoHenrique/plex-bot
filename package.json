@@ -1,0 +1,21 @@
+{
+  "name": "plex-bot",
+  "version": "1.0.0",
+  "description": "Bot Telegram para alertas e registro de execução do PLEX",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "node-telegram-bot-api": "^0.66.0",
+    "node-cron": "^3.0.3",
+    "axios": "^1.7.9",
+    "dotenv": "^16.4.7",
+    "date-fns": "^3.6.0",
+    "date-fns-tz": "^3.2.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
