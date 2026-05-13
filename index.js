@@ -292,6 +292,14 @@ bot.on('message', async (msg) => {
     return;
   }
 
+  // DD/MM/YYYY — agenda de outra data
+  const dateMatch = text.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (dateMatch) {
+    const dateStr = `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`;
+    await sendDaySummaryForDate(dateStr);
+    return;
+  }
+
   // nova DESCRIÇÃO HH:MM HH:MM — registra atividade não planejada
   // ex: "nova Reunião com fornecedor 14:00 14:30"
   const novaMatch = text.match(/^nova\s+(.+?)\s+(\d{1,2}:\d{2})\s+(\d{1,2}:\d{2})$/i);
@@ -510,6 +518,52 @@ async function sendDetailedSummary() {
 
   await bot.sendMessage(TG_CHAT_ID,
     `📋 *Resumo detalhado — ${todayStr()}*\n\n` + lines.join('\n\n') + footer,
+    { parse_mode: 'Markdown' });
+}
+
+// ─── Agenda de data específica ────────────────────────────────────────────────
+async function sendDaySummaryForDate(dateStr) {
+  let activities;
+  try {
+    activities = await fetchTodayActivities(dateStr);
+  } catch (err) {
+    await bot.sendMessage(TG_CHAT_ID, `❌ Erro ao buscar agenda: ${err.message}`);
+    return;
+  }
+
+  // Label legível: "amanhã", "hoje" ou dia da semana
+  const diasSemana = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado'];
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  const diaNome = diasSemana[dt.getDay()];
+  const today = todayStr();
+  const [ty, tm, td] = today.split('-').map(Number);
+  const diffDays = Math.round((dt - new Date(ty, tm - 1, td)) / 86400000);
+  const labelData = diffDays === 0 ? 'hoje' : diffDays === 1 ? 'amanhã' : diffDays === -1 ? 'ontem' : diaNome;
+  const [dd, mm, yyyy] = [String(d).padStart(2,'0'), String(m).padStart(2,'0'), y];
+
+  if (!activities || activities.length === 0) {
+    await bot.sendMessage(TG_CHAT_ID, `📭 Nenhuma atividade planejada para ${labelData} (${dd}/${mm}/${yyyy}).`);
+    return;
+  }
+
+  const sorted = [...activities].sort((a, b) => (a.inicio_planejado || '').localeCompare(b.inicio_planejado || ''));
+  const lines = sorted.map((act, i) => {
+    const inicio = hhmm(act.inicio_planejado);
+    const fim    = hhmm(act.fim_planejado);
+    let icon = '⬜';
+    if (act.status === 'EXECUTADO')  icon = '✅';
+    if (act.status === 'DESVIO')     icon = '⚠️';
+    if (act.status === 'NÃO EXEC')   icon = '❌';
+    return `${icon} ${i + 1}. ${inicio}–${fim} ${act.atividade}`;
+  });
+
+  const total = activities.length;
+  const feito = activities.filter(a => a.status === 'EXECUTADO' || a.status === 'DESVIO').length;
+
+  await bot.sendMessage(TG_CHAT_ID,
+    `📅 *Agenda de ${labelData} — ${dd}/${mm}/${yyyy}*\n${feito}/${total} concluídas\n\n` +
+    lines.join('\n'),
     { parse_mode: 'Markdown' });
 }
 
