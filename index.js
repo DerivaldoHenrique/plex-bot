@@ -2,6 +2,7 @@ require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const cron = require('node-cron');
 const axios = require('axios');
+const fs = require('fs');
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const PLEX_BASE    = process.env.PLEX_BASE_URL || 'https://plex.benellog.com.br';
@@ -9,14 +10,55 @@ const PLEX_EMAIL   = process.env.PLEX_EMAIL;
 const PLEX_SENHA   = process.env.PLEX_SENHA;
 const TG_TOKEN     = process.env.TELEGRAM_BOT_TOKEN;
 const TG_CHAT_ID   = process.env.TELEGRAM_CHAT_ID;
+const STATE_FILE   = '/tmp/plex-bot-state.json';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 let plexToken       = null;
 let tokenExpiry     = 0;
-let todayActivities = [];         // [{id, atividade, inicio_planejado, fim_planejado, ...}]
-let alertedIds      = new Set();  // IDs já alertados hoje
-let pendingConfirm  = null;       // {id, atividade, inicio_planejado, fim_planejado}
+let todayActivities = [];
+let alertedIds      = new Set();
+let pendingConfirm  = null;
 let lastLoadedDate  = null;
+
+// ─── Persist state across restarts ────────────────────────────────────────────
+function saveState() {
+  try {
+    fs.writeFileSync(STATE_FILE, JSON.stringify({
+      pendingConfirm,
+      alertedIds: [...alertedIds],
+      lastLoadedDate,
+    }));
+  } catch (_) {}
+}
+
+function restoreState() {
+  try {
+    const raw = fs.readFileSync(STATE_FILE, 'utf8');
+    const s = JSON.parse(raw);
+    if (s.lastLoadedDate === todayStr()) {
+      if (s.pendingConfirm) pendingConfirm = s.pendingConfirm;
+      if (s.alertedIds)     alertedIds     = new Set(s.alertedIds);
+      lastLoadedDate = s.lastLoadedDate;
+      console.log(`[BOT] Estado restaurado — pendente: ${pendingConfirm?.atividade || 'nenhum'}, alertados: ${alertedIds.size}`);
+    }
+  } catch (_) {}
+}
+
+// Fallback: se o estado foi perdido, encontra a atividade mais recente que deveria
+// ter sido alertada (início nos últimos 15 min, ainda não executada)
+function findLastDueActivity() {
+  const [ch, cm] = nowHHMM().split(':').map(Number);
+  return todayActivities
+    .filter(act => {
+      if (act.status === 'EXECUTADO' || act.status === 'DESVIO') return false;
+      const t = hhmm(act.inicio_planejado);
+      if (!t) return false;
+      const [ah, am] = t.split(':').map(Number);
+      const diff = (ch * 60 + cm) - (ah * 60 + am);
+      return diff >= 0 && diff <= 15;
+    })
+    .sort((a, b) => hhmm(b.inicio_planejado).localeCompare(hhmm(a.inicio_planejado)))[0] || null;
+}
 
 // ─── Telegram ─────────────────────────────────────────────────────────────────
 const bot = new TelegramBot(TG_TOKEN, { polling: true });
@@ -165,6 +207,7 @@ async function sendAlert(activity) {
   await bot.sendMessage(TG_CHAT_ID, msg, { parse_mode: 'Markdown' });
   pendingConfirm = activity;
   alertedIds.add(activity.id);
+  saveState();
   console.log(`[BOT] Alerta enviado: ${activity.atividade} (${inicio})`);
 }
 
@@ -237,9 +280,19 @@ bot.on('message', async (msg) => {
   }
 
   // Handle confirmation of pending activity
+  // Se pendingConfirm for null (bot reiniciou), tenta recuperar pelo fallback
+  if (!pendingConfirm) {
+    await loadTodayPlan();
+    pendingConfirm = findLastDueActivity();
+    if (pendingConfirm) {
+      console.log(`[BOT] Fallback: usando atividade "${pendingConfirm.atividade}" como pendente`);
+    }
+  }
+
   if (pendingConfirm) {
     await handleConfirmation(text, pendingConfirm);
     pendingConfirm = null;
+    saveState();
     return;
   }
 
@@ -347,6 +400,7 @@ async function sendTodaySummary() {
   try {
     await plexLogin();
     await loadTodayPlan();
+    restoreState(); // restaura pendingConfirm e alertedIds após restart
     await bot.sendMessage(TG_CHAT_ID,
       `🤖 *PLEX Bot iniciado!*\n` +
       `📅 Plano carregado: ${todayActivities.length} atividades\n\n` +
