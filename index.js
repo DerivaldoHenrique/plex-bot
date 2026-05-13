@@ -252,40 +252,76 @@ bot.on('message', async (msg) => {
   const text = msg.text?.trim();
   if (!text) return;
 
-  // Command: /hoje — list today's activities
+  // /hoje — lista com números para confirmação posterior
   if (text === '/hoje') {
     await sendTodaySummary();
     return;
   }
 
-  // Command: /status — show pending
+  // /resumo — resumo detalhado planejado × executado
+  if (text === '/resumo') {
+    await sendDetailedSummary();
+    return;
+  }
+
+  // /pendentes — só atividades ainda não confirmadas
+  if (text === '/pendentes') {
+    await sendPendentes();
+    return;
+  }
+
+  // /status — atividade aguardando confirmação
   if (text === '/status') {
     if (!pendingConfirm) {
       await bot.sendMessage(TG_CHAT_ID, '✅ Nenhuma atividade aguardando confirmação.');
     } else {
       await bot.sendMessage(TG_CHAT_ID,
-        `⏳ Aguardando confirmação: *${pendingConfirm.atividade}*\nPlanejado: ${hhmm(pendingConfirm.inicio_planejado)}–${hhmm(pendingConfirm.fim_planejado)}`,
+        `⏳ Aguardando: *${pendingConfirm.atividade}*\nPlan: ${hhmm(pendingConfirm.inicio_planejado)}–${hhmm(pendingConfirm.fim_planejado)}`,
         { parse_mode: 'Markdown' });
     }
     return;
   }
 
-  // Command: /pular — skip current pending
+  // /pular — pula confirmação atual
   if (text === '/pular') {
     if (pendingConfirm) {
       await bot.sendMessage(TG_CHAT_ID, `⏭ Pulando: ${pendingConfirm.atividade}`);
       pendingConfirm = null;
+      saveState();
     }
     return;
   }
 
-  // Handle confirmation of pending activity
-  // Se pendingConfirm for null (bot reiniciou), tenta recuperar pelo fallback
+  // nova DESCRIÇÃO HH:MM HH:MM — registra atividade não planejada
+  // ex: "nova Reunião com fornecedor 14:00 14:30"
+  const novaMatch = text.match(/^nova\s+(.+?)\s+(\d{1,2}:\d{2})\s+(\d{1,2}:\d{2})$/i);
+  if (novaMatch) {
+    await registrarNaoplanejada(novaMatch[1].trim(), novaMatch[2], novaMatch[3]);
+    return;
+  }
+
+  // NUMBER CONFIRMAÇÃO — confirma atividade específica pelo número do /hoje
+  // ex: "5 ok", "5 22:01 22:30", "5 desvio 22:01 22:30"
+  const numMatch = text.match(/^(\d+)\s+(.+)$/);
+  if (numMatch) {
+    await loadTodayPlan();
+    const idx = parseInt(numMatch[1]) - 1;
+    const sorted = [...todayActivities].sort((a,b) => (a.inicio_planejado||'').localeCompare(b.inicio_planejado||''));
+    const act = sorted[idx];
+    if (!act) {
+      await bot.sendMessage(TG_CHAT_ID, `❌ Número ${numMatch[1]} não encontrado. Use /pendentes para ver os números.`);
+      return;
+    }
+    await handleConfirmation(numMatch[2], act);
+    return;
+  }
+
+  // Confirmação simples (ok / HH:MM HH:MM) para pendingConfirm ou fallback
   if (!pendingConfirm) {
     await loadTodayPlan();
     pendingConfirm = findLastDueActivity();
     if (pendingConfirm) {
-      console.log(`[BOT] Fallback: usando atividade "${pendingConfirm.atividade}" como pendente`);
+      console.log(`[BOT] Fallback: usando "${pendingConfirm.atividade}"`);
     }
   }
 
@@ -297,7 +333,15 @@ bot.on('message', async (msg) => {
   }
 
   await bot.sendMessage(TG_CHAT_ID,
-    'Nenhuma atividade aguardando confirmação.\n\nComandos:\n/hoje — resumo do dia\n/status — atividade pendente\n/pular — pular confirmação atual');
+    'Comandos disponíveis:\n' +
+    '/hoje — lista do dia (com números)\n' +
+    '/pendentes — só não confirmadas\n' +
+    '/resumo — planejado × executado\n' +
+    '/status — atividade aguardando\n' +
+    '/pular — pular confirmação\n\n' +
+    '5 ok — confirma atividade nº5\n' +
+    '5 22:01 22:30 — confirma com horários\n' +
+    'nova Reunião extra 14:00 14:30 — adiciona não planejada');
 });
 
 // ─── Handle confirmation ──────────────────────────────────────────────────────
@@ -377,21 +421,167 @@ async function sendTodaySummary() {
     return;
   }
 
-  const lines = todayActivities.map(act => {
+  const sorted = [...todayActivities].sort((a, b) => (a.inicio_planejado || '').localeCompare(b.inicio_planejado || ''));
+  const lines = sorted.map((act, i) => {
     const inicio = hhmm(act.inicio_planejado);
     const fim    = hhmm(act.fim_planejado);
     let icon = '⬜';
     if (act.status === 'EXECUTADO')  icon = '✅';
     if (act.status === 'DESVIO')     icon = '⚠️';
     if (act.status === 'NÃO EXEC')   icon = '❌';
-    return `${icon} ${inicio}–${fim} ${act.atividade}`;
+    return `${icon} *${i + 1}.* ${inicio}–${fim} ${act.atividade}`;
   });
 
-  const total    = todayActivities.length;
-  const feito    = todayActivities.filter(a => a.status === 'EXECUTADO' || a.status === 'DESVIO').length;
-  const header   = `📅 *Plano de hoje — ${todayStr()}*\n${feito}/${total} concluídas\n\n`;
+  const total  = todayActivities.length;
+  const feito  = todayActivities.filter(a => a.status === 'EXECUTADO' || a.status === 'DESVIO').length;
+  const header = `📅 *Plano de hoje — ${todayStr()}*\n${feito}/${total} concluídas\n\n`;
 
-  await bot.sendMessage(TG_CHAT_ID, header + lines.join('\n'), { parse_mode: 'Markdown' });
+  await bot.sendMessage(TG_CHAT_ID, header + lines.join('\n') + '\n\n_Use `N ok` ou `N HH:MM HH:MM` para confirmar_', { parse_mode: 'Markdown' });
+}
+
+// ─── Pendentes ────────────────────────────────────────────────────────────────
+async function sendPendentes() {
+  await loadTodayPlan();
+  const sorted = [...todayActivities].sort((a, b) => (a.inicio_planejado || '').localeCompare(b.inicio_planejado || ''));
+  const pendentes = sorted
+    .map((act, i) => ({ act, num: i + 1 }))
+    .filter(({ act }) => act.status !== 'EXECUTADO' && act.status !== 'DESVIO');
+
+  if (pendentes.length === 0) {
+    await bot.sendMessage(TG_CHAT_ID, '🎉 Todas as atividades foram confirmadas!');
+    return;
+  }
+
+  const lines = pendentes.map(({ act, num }) => {
+    const inicio = hhmm(act.inicio_planejado);
+    const fim    = hhmm(act.fim_planejado);
+    return `⬜ *${num}.* ${inicio}–${fim} ${act.atividade}`;
+  });
+
+  await bot.sendMessage(TG_CHAT_ID,
+    `📋 *Pendentes — ${todayStr()}*\n${pendentes.length} não confirmadas\n\n` +
+    lines.join('\n') + '\n\n_Use `N ok` ou `N HH:MM HH:MM` para confirmar_',
+    { parse_mode: 'Markdown' });
+}
+
+// ─── Resumo detalhado ─────────────────────────────────────────────────────────
+async function sendDetailedSummary() {
+  await loadTodayPlan();
+  if (todayActivities.length === 0) {
+    await bot.sendMessage(TG_CHAT_ID, '📭 Nenhuma atividade planejada para hoje.');
+    return;
+  }
+
+  const sorted = [...todayActivities].sort((a, b) => (a.inicio_planejado || '').localeCompare(b.inicio_planejado || ''));
+
+  let totalPlanMin = 0;
+  let totalExeMin  = 0;
+  let executadas = 0, desvios = 0, pendentes = 0;
+
+  const lines = sorted.map((act, i) => {
+    const iPlan = hhmm(act.inicio_planejado);
+    const fPlan = hhmm(act.fim_planejado);
+    const iExe  = act.inicio_executado ? hhmm(act.inicio_executado) : '—';
+    const fExe  = act.fim_executado    ? hhmm(act.fim_executado)    : '—';
+
+    const durPlan = calcDuracao(act.inicio_planejado, act.fim_planejado);
+    const durExe  = act.inicio_executado && act.fim_executado
+      ? calcDuracao(act.inicio_executado, act.fim_executado) : null;
+
+    if (typeof durPlan === 'number') totalPlanMin += durPlan;
+    if (typeof durExe  === 'number') totalExeMin  += durExe;
+
+    let icon = '⬜';
+    if (act.status === 'EXECUTADO') { icon = '✅'; executadas++; }
+    else if (act.status === 'DESVIO') { icon = '⚠️'; desvios++; }
+    else { pendentes++; }
+
+    const execInfo = iExe !== '—'
+      ? ` › ${iExe}–${fExe} (${durExe}min)`
+      : '';
+
+    return `${icon} *${i + 1}.* ${act.atividade}\n   📅 ${iPlan}–${fPlan} (${durPlan}min)${execInfo}`;
+  });
+
+  const durFmt = (m) => `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}`;
+  const footer =
+    `\n📊 *Resumo:* ${executadas} exec · ${desvios} desvio · ${pendentes} pend\n` +
+    `⏱ Planejado: ${durFmt(totalPlanMin)} | Executado: ${durFmt(totalExeMin)}`;
+
+  await bot.sendMessage(TG_CHAT_ID,
+    `📋 *Resumo detalhado — ${todayStr()}*\n\n` + lines.join('\n\n') + footer,
+    { parse_mode: 'Markdown' });
+}
+
+// ─── Registrar atividade não planejada ────────────────────────────────────────
+async function registrarNaoplanejada(atividade, inicioStr, fimStr) {
+  const date = todayStr();
+  let rows;
+  try {
+    const fresh = await fetchTodayActivities(date);
+    todayActivities = fresh;
+    lastLoadedDate  = date;
+
+    const existingRows = fresh.map(act => ({
+      id:                String(act.id),
+      alocacao:          act.alocacao_nome,
+      prioridade:        act.prioridade_nome,
+      atividade:         act.atividade,
+      situacao_planejada: act.situacao_planejada,
+      origem:            act.origem,
+      inicio_planejado:  act.inicio_planejado,
+      fim_planejado:     act.fim_planejado,
+      total_planejado:   act.total_planejado,
+      inicio_executado:  act.inicio_executado || null,
+      fim_executado:     act.fim_executado    || null,
+      total_executado:   act.total_executado  || null,
+      status:            act.status || 'NÃO EXEC',
+      sub_atividade:     act.sub_atividade || '',
+    }));
+
+    const inicioExe = buildDateTimeStr(date, inicioStr);
+    const fimExe    = buildDateTimeStr(date, fimStr);
+    const dur = calcDuracao(inicioExe, fimExe);
+
+    const novaRow = {
+      id:                '',
+      alocacao:          '',
+      prioridade:        '',
+      atividade,
+      situacao_planejada: 'NÃO PLANEJADO',
+      origem:            'NÃO PLANEJADO',
+      inicio_planejado:  inicioExe,
+      fim_planejado:     fimExe,
+      total_planejado:   String(dur),
+      inicio_executado:  inicioExe,
+      fim_executado:     fimExe,
+      total_executado:   String(dur),
+      status:            'EXECUTADO',
+      sub_atividade:     '',
+    };
+
+    rows = [...existingRows, novaRow];
+  } catch (err) {
+    await bot.sendMessage(TG_CHAT_ID, `❌ Erro ao buscar dados: ${err.message}`);
+    return;
+  }
+
+  try {
+    const result = await saveDay(date, rows);
+    if (result.success !== false) {
+      await bot.sendMessage(TG_CHAT_ID,
+        `✅ *Atividade não planejada registrada!*\n` +
+        `📌 ${atividade}\n` +
+        `🕐 ${inicioStr}–${fimStr}`,
+        { parse_mode: 'Markdown' });
+      // reload state
+      await loadTodayPlan();
+    } else {
+      await bot.sendMessage(TG_CHAT_ID, `⚠️ Aviso do servidor: ${result.message}`);
+    }
+  } catch (err) {
+    await bot.sendMessage(TG_CHAT_ID, `❌ Erro ao salvar: ${err.message}`);
+  }
 }
 
 // ─── Startup ──────────────────────────────────────────────────────────────────
@@ -404,7 +594,7 @@ async function sendTodaySummary() {
     await bot.sendMessage(TG_CHAT_ID,
       `🤖 *PLEX Bot iniciado!*\n` +
       `📅 Plano carregado: ${todayActivities.length} atividades\n\n` +
-      `Comandos:\n/hoje — resumo do dia\n/status — atividade pendente\n/pular — pular confirmação`,
+      `Comandos:\n/hoje — lista do dia (com números)\n/pendentes — só não confirmadas\n/resumo — planejado × executado\n/status — atividade pendente\n/pular — pular confirmação`,
       { parse_mode: 'Markdown' });
     console.log(`[BOT] Pronto. ${todayActivities.length} atividades carregadas.`);
   } catch (err) {
