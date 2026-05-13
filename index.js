@@ -300,10 +300,10 @@ bot.on('message', async (msg) => {
     return;
   }
 
-  // nova DESCRIÇÃO HH:MM HH:MM — registra atividade não planejada
-  // ex: "nova Reunião com fornecedor 14:00 14:30"
-  const novaMatch = text.match(/^nova\s+(.+?)\s+(\d{1,2}:\d{2})\s+(\d{1,2}:\d{2})$/i);
-  if (novaMatch) {
+  // DESCRIÇÃO HH:MM HH:MM — registra atividade não planejada
+  // ex: "nova Reunião extra 14:00 14:30" ou "Visita a fornecedor 08:20 17:10"
+  const novaMatch = text.match(/^(?:nova\s+)?(.+?)\s+(\d{1,2}:\d{2})\s+(\d{1,2}:\d{2})$/i);
+  if (novaMatch && !/^\d+$/.test(novaMatch[1].trim())) {
     await registrarNaoplanejada(novaMatch[1].trim(), novaMatch[2], novaMatch[3]);
     return;
   }
