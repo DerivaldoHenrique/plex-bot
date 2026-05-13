@@ -30,8 +30,8 @@ async function plexLogin() {
     email: PLEX_EMAIL,
     senha: PLEX_SENHA,
   });
-  if (!res.data?.token) throw new Error('Login falhou: ' + JSON.stringify(res.data));
-  plexToken  = res.data.token;
+  if (!res.data?.data?.token) throw new Error('Login falhou: ' + JSON.stringify(res.data));
+  plexToken  = res.data.data.token;
   tokenExpiry = Date.now() + 11 * 60 * 60 * 1000; // 11h (token dura 12h)
   console.log('[PLEX] Login OK');
 }
