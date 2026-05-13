@@ -306,7 +306,7 @@ async function handleConfirmation(text, activity) {
   const { status, times } = parseTimeInput(text);
 
   let inicioExe, fimExe;
-  const nowHHMM = nowHHMM();
+  const agoraHHMM = nowHHMM();
 
   if (!times || times.length === 0) {
     // "ok" — use planned times
@@ -315,7 +315,7 @@ async function handleConfirmation(text, activity) {
   } else if (times.length === 1) {
     // "HH:MM" — custom start, fim = now
     inicioExe = buildDateTimeStr(date, times[0]);
-    fimExe    = buildDateTimeStr(date, nowHHMM);
+    fimExe    = buildDateTimeStr(date, agoraHHMM);
   } else {
     // "HH:MM HH:MM" — custom start and end
     inicioExe = buildDateTimeStr(date, times[0]);
