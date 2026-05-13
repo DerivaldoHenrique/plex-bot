@@ -2,8 +2,6 @@ require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const cron = require('node-cron');
 const axios = require('axios');
-const { format, parseISO, parse, isValid } = require('date-fns');
-const { toZonedTime, fromZonedTime } = require('date-fns-tz');
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const PLEX_BASE    = process.env.PLEX_BASE_URL || 'https://plex.benellog.com.br';
@@ -11,7 +9,6 @@ const PLEX_EMAIL   = process.env.PLEX_EMAIL;
 const PLEX_SENHA   = process.env.PLEX_SENHA;
 const TG_TOKEN     = process.env.TELEGRAM_BOT_TOKEN;
 const TG_CHAT_ID   = process.env.TELEGRAM_CHAT_ID;
-const TZ           = 'America/Sao_Paulo';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 let plexToken       = null;
@@ -61,12 +58,36 @@ async function saveDay(dateStr, rows) {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-function nowBrasil() {
-  return toZonedTime(new Date(), TZ);
+const TZ = 'America/Sao_Paulo';
+
+function _intlParts(date) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: TZ,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
 }
 
 function todayStr() {
-  return format(nowBrasil(), 'yyyy-MM-dd');
+  // Returns 'YYYY-MM-DD' in Brasília time
+  const p = _intlParts(new Date());
+  const get = (t) => p.find(x => x.type === t).value;
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
+function nowHHMM() {
+  // Returns 'HH:MM' in Brasília time
+  const p = _intlParts(new Date());
+  const get = (t) => p.find(x => x.type === t).value;
+  return `${get('hour')}:${get('minute')}`;
+}
+
+function nowDateTimeStr() {
+  // Returns 'YYYY-MM-DD HH:MM:SS' in Brasília time
+  const p = _intlParts(new Date());
+  const get = (t) => p.find(x => x.type === t).value;
+  return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}:${get('second')}`;
 }
 
 function hhmm(dateTimeStr) {
@@ -155,8 +176,7 @@ cron.schedule('* * * * *', async () => {
   try {
     await loadTodayPlan();
 
-    const now    = nowBrasil();
-    const nowHHMM = format(now, 'HH:mm');
+    const nowHHMM = nowHHMM();
     const date   = todayStr();
 
     for (const act of todayActivities) {
@@ -234,7 +254,7 @@ async function handleConfirmation(text, activity) {
   const { status, times } = parseTimeInput(text);
 
   let inicioExe, fimExe;
-  const nowHHMM = format(nowBrasil(), 'HH:mm');
+  const nowHHMM = nowHHMM();
 
   if (!times || times.length === 0) {
     // "ok" — use planned times
