@@ -3,6 +3,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const cron = require('node-cron');
 const axios = require('axios');
 const fs = require('fs');
+const { initPlanner, gerarPlanoDoDia } = require('./planner');
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const PLEX_BASE    = process.env.PLEX_BASE_URL || 'https://plex.benellog.com.br';
@@ -264,6 +265,12 @@ bot.on('message', async (msg) => {
     return;
   }
 
+  // /gerar — força a geração do plano do dia a partir da GRD
+  if (text === '/gerar') {
+    await gerarPlanoDoDia({ manual: true });
+    return;
+  }
+
   // /pendentes — só atividades ainda não confirmadas
   if (text === '/pendentes') {
     await sendPendentes();
@@ -346,7 +353,8 @@ bot.on('message', async (msg) => {
     '/pendentes — só não confirmadas\n' +
     '/resumo — planejado × executado\n' +
     '/status — atividade aguardando\n' +
-    '/pular — pular confirmação\n\n' +
+    '/pular — pular confirmação\n' +
+    '/gerar — gerar plano do dia pela GRD\n\n' +
     '5 ok — confirma atividade nº5\n' +
     '5 22:01 22:30 — confirma com horários\n' +
     'nova Reunião extra 14:00 14:30 — adiciona não planejada');
@@ -645,6 +653,7 @@ async function registrarNaoplanejada(atividade, inicioStr, fimStr) {
     await plexLogin();
     await loadTodayPlan();
     restoreState(); // restaura pendingConfirm e alertedIds após restart
+    initPlanner({ axios, PLEX_BASE, getToken, bot, TG_CHAT_ID, todayStr, saveDay, fetchTodayActivities });
     await bot.sendMessage(TG_CHAT_ID,
       `🤖 *PLEX Bot iniciado!*\n` +
       `📅 Plano carregado: ${todayActivities.length} atividades\n\n` +
